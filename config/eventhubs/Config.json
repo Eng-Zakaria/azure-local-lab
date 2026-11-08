@@ -1,0 +1,23 @@
+{
+  "UserConfig": {
+    "NamespaceConfig": [
+      {
+        "Type": "EventHub",
+        "Name": "emulatorNs1",
+        "Entities": [
+          {
+            "Name": "transactions",
+            "PartitionCount": "2",
+            "ConsumerGroups": [{ "Name": "fraud-scorer" }, { "Name": "lake-writer" }]
+          },
+          {
+            "Name": "telemetry",
+            "PartitionCount": "2",
+            "ConsumerGroups": [{ "Name": "lab" }]
+          }
+        ]
+      }
+    ],
+    "LoggingConfig": { "Type": "File" }
+  }
+}

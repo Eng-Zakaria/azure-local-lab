@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+      - run: uv run pytest
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: ./scripts/init-env.sh
+      - run: docker compose --profile streaming up -d --wait azurite postgres
+      - run: docker compose --profile streaming up -d eventhubs
+      - name: wait for Event Hubs emulator
+        run: timeout 120 bash -c 'until curl -sf localhost:5300/health; do sleep 3; done'
+      - run: uv sync
+      - run: uv run pytest -m integration -v
+      - run: uv run python scripts/smoke.py
+      - if: failure()
+        run: docker compose --profile streaming logs --tail 100
+
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: az bicep install && az bicep build --file infra/main.bicep --stdout > /dev/null
+      - run: az bicep lint --file infra/main.bicep

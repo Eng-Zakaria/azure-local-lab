@@ -1,0 +1,103 @@
+# Azure Local Lab — run Azure-shaped workloads on a laptop with the *same SDKs*.
+#
+#   docker compose up -d                       # core: storage, postgres+pgvector, observability
+#   docker compose --profile streaming up -d   # + Event Hubs emulator (AMQP + Kafka)
+#   docker compose --profile messaging up -d   # + Service Bus emulator (+ SQL Server)
+#   docker compose --profile cosmos up -d      # + Cosmos DB emulator (NoSQL API)
+#   docker compose --profile ai up -d          # + Ollama (OpenAI-compatible stand-in for Azure OpenAI)
+#   docker compose --profile all up -d         # everything
+#
+# Emulator images track Microsoft's "latest" channel on purpose: Microsoft ships emulator
+# fixes there and recommends it. Everything else is pinned.
+
+name: azure-local-lab
+
+services:
+  # ---------- core ----------------------------------------------------------
+  azurite: # Azure Blob / Queue / Table storage (stand-in for Storage Account / ADLS Gen2)
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --loose --skipApiVersionCheck
+    ports: ["10000:10000", "10001:10001", "10002:10002"]
+    volumes: ["azurite-data:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10000 || exit 1"]
+      interval: 5s
+      retries: 20
+
+  postgres: # Azure Database for PostgreSQL Flexible Server + pgvector
+    image: pgvector/pgvector:0.8.0-pg16
+    environment:
+      POSTGRES_USER: lab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lab-local-only}
+      POSTGRES_DB: lab
+    ports: ["${LAB_PG_PORT:-5433}:5432"] # 5433 by default: many dev machines already run Postgres on 5432
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lab -d lab"]
+      interval: 5s
+      retries: 20
+
+  observability: # OTel Collector + Prometheus + Tempo + Loki + Grafana (stand-in for App Insights / Azure Monitor)
+    image: grafana/otel-lgtm:0.8.1
+    ports:
+      - "${LAB_GRAFANA_PORT:-3001}:3000" # Grafana (admin / admin); 3001 avoids the usual :3000 dev servers
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    volumes: ["lgtm-data:/data"]
+
+  # ---------- streaming -----------------------------------------------------
+  eventhubs: # Azure Event Hubs emulator — AMQP on 5672, Kafka on 9092
+    image: mcr.microsoft.com/azure-messaging/eventhubs-emulator:latest
+    profiles: ["streaming", "all"]
+    depends_on:
+      azurite: { condition: service_healthy }
+    environment:
+      BLOB_SERVER: azurite
+      METADATA_SERVER: azurite
+      ACCEPT_EULA: "Y"
+    volumes:
+      - ./config/eventhubs/Config.json:/Eventhubs_Emulator/ConfigFiles/Config.json:ro
+    ports: ["5672:5672", "9092:9092", "5300:5300"]
+
+  # ---------- messaging -----------------------------------------------------
+  mssql: # backing store required by the Service Bus emulator; also usable as an Azure SQL stand-in
+    image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04
+    profiles: ["messaging", "all"]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?run scripts/init-env first}
+    ports: ["${LAB_MSSQL_PORT:-14330}:1433"] # avoids clashing with a local SQL Server
+
+  servicebus: # Azure Service Bus emulator — exposed on 5673 so it can coexist with Event Hubs
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    profiles: ["messaging", "all"]
+    depends_on: [mssql]
+    environment:
+      SQL_SERVER: mssql
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?run scripts/init-env first}
+      ACCEPT_EULA: "Y"
+    volumes:
+      - ./config/servicebus/Config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    ports: ["5673:5672", "5301:5300"]
+
+  # ---------- cosmos --------------------------------------------------------
+  cosmos: # Azure Cosmos DB emulator (Linux, NoSQL API, HTTP mode)
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview
+    profiles: ["cosmos", "all"]
+    command: --protocol http
+    ports: ["8081:8081", "1234:1234"]
+
+  # ---------- ai ------------------------------------------------------------
+  ollama: # OpenAI-compatible endpoint used in place of Azure OpenAI
+    image: ollama/ollama:0.5.7
+    profiles: ["ai", "all"]
+    ports: ["11434:11434"]
+    volumes: ["ollama-data:/root/.ollama"]
+
+volumes:
+  azurite-data:
+  pg-data:
+  lgtm-data:
+  ollama-data:
