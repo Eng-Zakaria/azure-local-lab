@@ -14,6 +14,21 @@
             "Name": "telemetry",
             "PartitionCount": "2",
             "ConsumerGroups": [{ "Name": "lab" }]
+          },
+          {
+            "Name": "cdr-stream",
+            "PartitionCount": "4",
+            "ConsumerGroups": [{ "Name": "bronze-writer" }, { "Name": "fraud-scorer" }]
+          },
+          {
+            "Name": "network-kpi-stream",
+            "PartitionCount": "4",
+            "ConsumerGroups": [{ "Name": "bronze-writer" }, { "Name": "noc-alerts" }]
+          },
+          {
+            "Name": "billing-stream",
+            "PartitionCount": "2",
+            "ConsumerGroups": [{ "Name": "bronze-writer" }]
           }
         ]
       }
